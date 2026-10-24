@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { socket } from './socket';
 import type { RoomState } from './types';
+import { isVoiceOn, setVoiceOn, speakCaptions, stopSpeaking, unlockSpeech } from './speak';
 import './App.css';
 
 type Screen = 'home' | 'game';
@@ -28,6 +29,8 @@ export default function App() {
   const [connected, setConnected] = useState(socket.connected);
   const [captionText, setCaptionText] = useState('');
   const [busy, setBusy] = useState(false);
+  const [voiceOn, setVoiceOnState] = useState(() => isVoiceOn());
+  const spokenKeyRef = useRef<string>('');
 
   const secondsLeft = useCountdown(state?.phaseEndsAt ?? null);
 
@@ -53,6 +56,38 @@ export default function App() {
   useEffect(() => {
     if (name) localStorage.setItem('cmg-name', name);
   }, [name]);
+
+  // Read captions aloud when voting or results appear (anonymous — text only)
+  useEffect(() => {
+    if (!state) return;
+    if (state.phase !== 'vote' && state.phase !== 'score') {
+      if (state.phase === 'caption' || state.phase === 'lobby' || state.phase === 'end') {
+        stopSpeaking();
+        spokenKeyRef.current = '';
+      }
+      return;
+    }
+    const texts = state.captions.map((c) => c.text).filter((t) => t.trim());
+    if (!texts.length) return;
+    const key = `${state.phase}:${state.roundNumber}:${texts.join('|')}`;
+    if (spokenKeyRef.current === key) return;
+    spokenKeyRef.current = key;
+    void speakCaptions(texts);
+  }, [state]);
+
+  function toggleVoice() {
+    unlockSpeech();
+    const next = !voiceOn;
+    setVoiceOn(next);
+    setVoiceOnState(next);
+    if (!next) return;
+    // Turning voice back on during vote/results — read captions now
+    if (!state || (state.phase !== 'vote' && state.phase !== 'score')) return;
+    const texts = state.captions.map((c) => c.text).filter((t) => t.trim());
+    if (!texts.length) return;
+    spokenKeyRef.current = `${state.phase}:${state.roundNumber}:${texts.join('|')}`;
+    void speakCaptions(texts);
+  }
 
   const sortedPlayers = useMemo(() => {
     if (!state) return [];
@@ -82,6 +117,7 @@ export default function App() {
 
   function createRoom(e: FormEvent) {
     e.preventDefault();
+    unlockSpeech();
     if (!name.trim()) {
       setError('Enter a display name');
       return;
@@ -93,6 +129,7 @@ export default function App() {
 
   function joinRoom(e: FormEvent) {
     e.preventDefault();
+    unlockSpeech();
     if (!name.trim() || !joinCode.trim()) {
       setError('Enter a name and room code');
       return;
@@ -120,6 +157,9 @@ export default function App() {
           <p className={`status ${connected ? 'ok' : 'bad'}`}>
             {connected ? 'Connected to server' : 'Connecting…'}
           </p>
+          <button type="button" className="voice-toggle" onClick={toggleVoice}>
+            {voiceOn ? 'Voice on' : 'Voice off'}
+          </button>
         </header>
 
         <div className="card-grid">
@@ -190,7 +230,12 @@ export default function App() {
             · Round {state.roundNumber || '—'} / {state.totalRounds}
           </span>
         </div>
-        <div className="phase-pill">{state.phase}</div>
+        <div className="topbar-right">
+          <button type="button" className="voice-toggle compact" onClick={toggleVoice}>
+            {voiceOn ? 'Voice on' : 'Voice off'}
+          </button>
+          <div className="phase-pill">{state.phase}</div>
+        </div>
       </header>
 
       {error && <p className="error banner">{error}</p>}

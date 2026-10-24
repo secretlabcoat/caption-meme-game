@@ -197,3 +197,25 @@ button:not(:disabled):hover { filter: brightness(1.08); }
 .status.bad { color: var(--danger); }
 .winner { font-size: 1.25rem; font-weight: 700; }
 .end { text-align: left; }
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.voice-toggle {
+  width: auto;
+  margin: 0.75rem auto 0;
+  padding: 0.45rem 0.9rem;
+  border-radius: 999px;
+  background: #2c3454;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.voice-toggle.compact {
+  margin: 0;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.75rem;
+}
+.hero .voice-toggle { display: inline-block; }
