@@ -43,3 +43,11 @@ Game photos live in `client/public/photos`. Stock photo watermarks are fine.
 - Render uses the `server` folder (`npm install` / `npm start`), health check `/health`
 - Netlify builds the `client` folder; set `VITE_SOCKET_URL` to the Render URL (no slash at the end) before building
 - Optionally set Render’s `CLIENT_ORIGIN` to your Netlify URL
+
+## Timeouts, reconnects & Render cold starts
+
+- **Cold start:** The API runs on Render's free tier, which sleeps after ~15 min with no HTTP traffic. The first open after idle can take ~30–60 s. Sleeping also wipes in-memory rooms.
+- **Keep-awake:** While the page is open, the client pings `/health` every 4 min so the server doesn't sleep mid-game.
+- **Reconnects:** Each browser has a stable player key (localStorage). If a phone locks or drops network, it rejoins the same seat automatically; players get a 3-minute grace period before removal.
+- **Socket.IO:** `pingInterval` 20 s / `pingTimeout` 60 s; client retries forever and reconnects when the tab becomes visible.
+- **Timers:** Default caption timer is 90 s (configurable 10–180). Voting has no timer.

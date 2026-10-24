@@ -33,7 +33,17 @@ app.get('/health', (_req, res) => res.json({ ok: true }));
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: { origin: corsOrigin },
+  // Tolerate phones that briefly background the tab / switch networks
+  pingInterval: 20000,
+  pingTimeout: 60000,
+  connectionStateRecovery: { maxDisconnectionDuration: 2 * 60 * 1000 },
 });
+
+/** Grace period before a disconnected player is removed (phone lock, network blip). */
+const RECONNECT_GRACE_MS = 3 * 60 * 1000;
+const pendingLeaves = new Map<string, NodeJS.Timeout>();
+/** Number of live sockets per stable player id. */
+const liveSockets = new Map<string, number>();
 
 function emitRoom(room: Room) {
   for (const playerId of room.players.keys()) {
@@ -42,18 +52,38 @@ function emitRoom(room: Room) {
 }
 
 io.on('connection', (socket) => {
+  const rawKey = (socket.handshake.auth as { playerKey?: unknown } | undefined)?.playerKey;
+  const pid = typeof rawKey === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(rawKey) ? rawKey : socket.id;
+  socket.join(pid);
+  liveSockets.set(pid, (liveSockets.get(pid) ?? 0) + 1);
+  const pending = pendingLeaves.get(pid);
+  if (pending) {
+    clearTimeout(pending);
+    pendingLeaves.delete(pid);
+  }
+  // Reconnecting player: restore them into their room
+  {
+    const existing = getRoomBySocket(pid);
+    const me = existing?.players.get(pid);
+    if (existing && me) {
+      me.connected = true;
+      socket.join(existing.code);
+      emitRoom(existing);
+    }
+  }
+
   socket.on('room:create', (payload: { name: string; totalRounds?: number; captionSeconds?: number }, ack?) => {
     const name = (payload?.name ?? '').trim();
     if (!name) {
       ack?.({ error: 'Name required' });
       return;
     }
-    const room = createRoom(socket.id, name, {
+    const room = createRoom(pid, name, {
       totalRounds: payload.totalRounds,
       captionSeconds: payload.captionSeconds,
     });
     socket.join(room.code);
-    const state = toPublicState(room, socket.id);
+    const state = toPublicState(room, pid);
     ack?.({ state });
     emitRoom(room);
   });
@@ -65,23 +95,23 @@ io.on('connection', (socket) => {
       ack?.({ error: 'Name and room code required' });
       return;
     }
-    const result = joinRoom(code, socket.id, name);
+    const result = joinRoom(code, pid, name);
     if ('error' in result) {
       ack?.({ error: result.error });
       return;
     }
     socket.join(result.code);
-    ack?.({ state: toPublicState(result, socket.id) });
+    ack?.({ state: toPublicState(result, pid) });
     emitRoom(result);
   });
 
   socket.on('game:start', (_payload, ack?) => {
-    const room = getRoomBySocket(socket.id);
+    const room = getRoomBySocket(pid);
     if (!room) {
       ack?.({ error: 'Not in a room' });
       return;
     }
-    const err = startGame(room, socket.id);
+    const err = startGame(room, pid);
     if (err) {
       ack?.({ error: err.error });
       return;
@@ -91,12 +121,12 @@ io.on('connection', (socket) => {
   });
 
   socket.on('caption:submit', (payload: { text: string }, ack?) => {
-    const room = getRoomBySocket(socket.id);
+    const room = getRoomBySocket(pid);
     if (!room) {
       ack?.({ error: 'Not in a room' });
       return;
     }
-    const err = submitCaption(room, socket.id, payload?.text ?? '');
+    const err = submitCaption(room, pid, payload?.text ?? '');
     if (err) {
       ack?.({ error: err.error });
       return;
@@ -106,12 +136,12 @@ io.on('connection', (socket) => {
   });
 
   socket.on('vote:submit', (payload: { captionId: string }, ack?) => {
-    const room = getRoomBySocket(socket.id);
+    const room = getRoomBySocket(pid);
     if (!room) {
       ack?.({ error: 'Not in a room' });
       return;
     }
-    const err = submitVote(room, socket.id, payload?.captionId ?? '');
+    const err = submitVote(room, pid, payload?.captionId ?? '');
     if (err) {
       ack?.({ error: err.error });
       return;
@@ -121,12 +151,12 @@ io.on('connection', (socket) => {
   });
 
   socket.on('game:next', (_payload, ack?) => {
-    const room = getRoomBySocket(socket.id);
+    const room = getRoomBySocket(pid);
     if (!room) {
       ack?.({ error: 'Not in a room' });
       return;
     }
-    const err = nextRoundOrEnd(room, socket.id);
+    const err = nextRoundOrEnd(room, pid);
     if (err) {
       ack?.({ error: err.error });
       return;
@@ -136,12 +166,12 @@ io.on('connection', (socket) => {
   });
 
   socket.on('game:rematch', (_payload, ack?) => {
-    const room = getRoomBySocket(socket.id);
+    const room = getRoomBySocket(pid);
     if (!room) {
       ack?.({ error: 'Not in a room' });
       return;
     }
-    const err = rematch(room, socket.id);
+    const err = rematch(room, pid);
     if (err) {
       ack?.({ error: err.error });
       return;
@@ -151,12 +181,12 @@ io.on('connection', (socket) => {
   });
 
   socket.on('game:lobby', (_payload, ack?) => {
-    const room = getRoomBySocket(socket.id);
+    const room = getRoomBySocket(pid);
     if (!room) {
       ack?.({ error: 'Not in a room' });
       return;
     }
-    const err = backToLobby(room, socket.id);
+    const err = backToLobby(room, pid);
     if (err) {
       ack?.({ error: err.error });
       return;
@@ -166,8 +196,27 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    const result = leaveRoom(socket.id);
-    if (result && !result.emptied) emitRoom(result.room);
+    const n = (liveSockets.get(pid) ?? 1) - 1;
+    if (n > 0) {
+      liveSockets.set(pid, n);
+      return;
+    }
+    liveSockets.delete(pid);
+    const room = getRoomBySocket(pid);
+    const me = room?.players.get(pid);
+    if (room && me) {
+      me.connected = false;
+      emitRoom(room);
+    }
+    pendingLeaves.set(
+      pid,
+      setTimeout(() => {
+        pendingLeaves.delete(pid);
+        if (liveSockets.get(pid)) return;
+        const result = leaveRoom(pid);
+        if (result && !result.emptied) emitRoom(result.room);
+      }, RECONNECT_GRACE_MS)
+    );
   });
 });
 

@@ -23,7 +23,7 @@ export default function App() {
   const [name, setName] = useState(() => localStorage.getItem('cmg-name') ?? '');
   const [joinCode, setJoinCode] = useState('');
   const [rounds, setRounds] = useState(3);
-  const [captionSeconds, setCaptionSeconds] = useState(45);
+  const [captionSeconds, setCaptionSeconds] = useState(90);
   const [state, setState] = useState<RoomState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(socket.connected);
@@ -101,7 +101,7 @@ export default function App() {
   ) {
     setBusy(true);
     setError(null);
-    socket.timeout(8000).emit(event, payload, (err: Error | null, res: { error?: string; state?: RoomState } & Record<string, unknown>) => {
+    socket.timeout(60000).emit(event, payload, (err: Error | null, res: { error?: string; state?: RoomState } & Record<string, unknown>) => {
       setBusy(false);
       if (err) {
         setError('Server did not respond. Is the API running on port 3001?');
@@ -186,7 +186,7 @@ export default function App() {
                 min={10}
                 max={180}
                 value={captionSeconds}
-                onChange={(e) => setCaptionSeconds(Number(e.target.value) || 45)}
+                onChange={(e) => setCaptionSeconds(Number(e.target.value) || 90)}
               />
             </label>
             <button type="submit" disabled={busy || !connected}>

@@ -6,7 +6,7 @@ const rooms = new Map<string, Room>();
 const socketToRoom = new Map<string, string>();
 
 const DEFAULT_ROUNDS = 3;
-const DEFAULT_CAPTION_SECONDS = 45;
+const DEFAULT_CAPTION_SECONDS = 90;
 const MIN_PLAYERS = 2;
 
 function generateCode(): string {
@@ -52,6 +52,12 @@ export function createRoom(
 export function joinRoom(code: string, socketId: string, name: string): Room | { error: string } {
   const room = rooms.get(code.toUpperCase());
   if (!room) return { error: 'Room not found' };
+  if (room.players.has(socketId)) {
+    const me = room.players.get(socketId)!;
+    me.connected = true;
+    socketToRoom.set(socketId, room.code);
+    return room;
+  }
   if (room.phase !== 'lobby') return { error: 'Game already started' };
   if ([...room.players.values()].some((p) => p.name.toLowerCase() === name.trim().toLowerCase())) {
     return { error: 'Name already taken in this room' };
@@ -79,9 +85,9 @@ export function getRoom(code: string): Room | undefined {
 export function leaveRoom(socketId: string): { room: Room; emptied: boolean } | null {
   const room = getRoomBySocket(socketId);
   if (!room) return null;
-  socketToRoom.delete(socketId);
   const player = room.players.get(socketId);
   if (!player) return null;
+  if (room.phase === 'lobby') socketToRoom.delete(socketId);
 
   if (room.phase === 'lobby') {
     room.players.delete(socketId);
