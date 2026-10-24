@@ -1,0 +1,15 @@
+# Netlify: static Vite client. Photos in client/public ship with the site.
+#
+# Site settings → Environment variables (needed at BUILD time):
+#   VITE_SOCKET_URL = https://YOUR-SERVICE.onrender.com
+# (no trailing slash — this is your Render Web Service URL)
+
+[build]
+  base = "client"
+  command = "npm run build"
+  publish = "dist"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

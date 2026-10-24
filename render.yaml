@@ -1,0 +1,22 @@
+# Render Blueprint for the Socket.IO game server.
+# Deploy: push this repo, then New → Blueprint in the Render dashboard,
+# or create a Web Service manually with Root Directory = server.
+#
+# After deploy, copy the public URL (https://….onrender.com) into Netlify as
+# VITE_SOCKET_URL and rebuild the site. Optionally set CLIENT_ORIGIN here to
+# your Netlify URL (e.g. https://my-game.netlify.app).
+
+services:
+  - type: web
+    name: caption-meme-game-api
+    runtime: node
+    rootDir: server
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: CLIENT_ORIGIN
+        sync: false

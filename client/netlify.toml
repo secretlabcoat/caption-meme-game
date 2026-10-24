@@ -1,0 +1,17 @@
+# Deploy the Vite client as a static site on Netlify.
+# In the Netlify UI, set Base directory to "client" (or leave blank if this
+# file is used with base = "client" from the repo root — see root netlify.toml).
+#
+# Required env var (Site settings → Environment variables), set BEFORE build:
+#   VITE_SOCKET_URL = https://YOUR-SERVICE.onrender.com
+# (no trailing slash)
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# SPA fallback so refresh on /anything still serves the app
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
