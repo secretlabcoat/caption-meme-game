@@ -64,6 +64,12 @@ function speakOne(text: string, voice: SpeechSynthesisVoice | null): Promise<voi
   });
 }
 
+const ORDINAL_WORDS = ['one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen','twenty'];
+
+function numberWord(n: number): string {
+  return ORDINAL_WORDS[n - 1] ?? String(n);
+}
+
 let speakToken = 0;
 
 /**
@@ -95,9 +101,9 @@ export async function speakCaptions(texts: string[]): Promise<void> {
 
   const voice = pickVoice();
 
-  for (const text of clean) {
+  for (let i = 0; i < clean.length; i++) {
     if (myToken !== speakToken || !isVoiceOn()) return;
-    await speakOne(text, voice);
+    await speakOne(`Number ${numberWord(i + 1)}. ${clean[i]}`, voice);
     // Tiny gap between captions so they don't run together
     if (myToken !== speakToken) return;
     await new Promise((r) => setTimeout(r, 280));
