@@ -82,6 +82,43 @@ export function getRoom(code: string): Room | undefined {
   return rooms.get(code.toUpperCase());
 }
 
+/**
+ * Player tapped Home. Drop their seat now so a reconnect does not put them back.
+ * A dropped connection still uses leaveRoom, which keeps the seat during a game.
+ */
+export function exitRoom(socketId: string): { room: Room; emptied: boolean } | null {
+  const room = getRoomBySocket(socketId);
+  if (!room || !room.players.has(socketId)) return null;
+
+  socketToRoom.delete(socketId);
+  room.players.delete(socketId);
+
+  if (room.players.size === 0) {
+    rooms.delete(room.code);
+    return { room, emptied: true };
+  }
+
+  if (room.hostId === socketId) {
+    const nextHost = [...room.players.values()].find((p) => p.connected) ?? [...room.players.values()][0];
+    if (nextHost) room.hostId = nextHost.id;
+  }
+
+  const anyoneConnected = [...room.players.values()].some((p) => p.connected);
+  if (!anyoneConnected) {
+    rooms.delete(room.code);
+    for (const [id, code] of [...socketToRoom]) {
+      if (code === room.code) socketToRoom.delete(id);
+    }
+    return { room, emptied: true };
+  }
+
+  // Don't leave the room waiting on someone who already went home.
+  if (room.phase === 'caption') maybeAdvanceFromCaption(room);
+  else if (room.phase === 'vote') maybeAdvanceFromVote(room);
+
+  return { room, emptied: false };
+}
+
 export function leaveRoom(socketId: string): { room: Room; emptied: boolean } | null {
   const room = getRoomBySocket(socketId);
   if (!room) return null;

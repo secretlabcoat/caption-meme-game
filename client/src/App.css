@@ -380,6 +380,17 @@ button.secondary:not(:disabled):active { box-shadow: 0 2px 0 var(--mint-deep); }
   justify-content: flex-end;
   gap: 0.45rem;
 }
+.home-btn {
+  width: auto;
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0.4rem 0.95rem;
+  border-radius: 999px;
+  font-size: 0.95rem;
+  background: linear-gradient(180deg, #ffe56a, var(--sun) 55%, #ffb703);
+  color: #3a2208;
+  box-shadow: 0 3px 0 var(--sun-deep);
+}
 .phase-pill {
   text-transform: uppercase;
   font-size: 0.78rem;
