@@ -34,6 +34,10 @@ Then open **http://localhost:5173** in a browser. Use a few tabs as different pl
 5. Vote for someone else’s caption (anonymous)  
 6. Scores update, then next rounds → winner → rematch or lobby  
 
+## Sound
+
+A short original cocktail-lounge loop plays in the browser (synthesized, not a recorded track). Tap or press a key once — browsers won’t start audio until you do. **Music on / Music off** mutes it and remembers the choice on this device. While captions are read aloud (“Number one…”), the music dips so the voice stays clear. **Voice on / Voice off** still controls that read-aloud.
+
 ## Photos
 
 Game photos live in `client/public/photos`. Stock photo watermarks are fine.
