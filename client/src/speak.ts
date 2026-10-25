@@ -1,5 +1,7 @@
 /** Simple Web Speech API helper — reads captions aloud one at a time. */
 
+import { duckMusic } from './music';
+
 const STORAGE_KEY = 'cmg-voice-on';
 
 export function isVoiceOn(): boolean {
@@ -14,9 +16,15 @@ export function setVoiceOn(on: boolean): void {
   if (!on) stopSpeaking();
 }
 
-export function stopSpeaking(): void {
+function cancelQueuedSpeech(): void {
   if (typeof window === 'undefined' || !window.speechSynthesis) return;
   window.speechSynthesis.cancel();
+}
+
+export function stopSpeaking(): void {
+  speakToken += 1;
+  cancelQueuedSpeech();
+  duckMusic(false);
 }
 
 function pickVoice(): SpeechSynthesisVoice | null {
@@ -75,6 +83,7 @@ let speakToken = 0;
 /**
  * Speak each non-empty caption in order. Cancels any previous queue.
  * Safe to call when voice is off (no-op).
+ * Lounge music dips for the whole read so the two don't fight.
  */
 export async function speakCaptions(texts: string[]): Promise<void> {
   if (!isVoiceOn()) return;
@@ -84,29 +93,36 @@ export async function speakCaptions(texts: string[]): Promise<void> {
   if (!clean.length) return;
 
   const myToken = ++speakToken;
-  stopSpeaking();
+  cancelQueuedSpeech();
+  duckMusic(true);
 
-  // Some browsers load voices asynchronously
-  if (!window.speechSynthesis.getVoices().length) {
-    await new Promise<void>((resolve) => {
-      const done = () => {
-        window.speechSynthesis.removeEventListener('voiceschanged', done);
-        resolve();
-      };
-      window.speechSynthesis.addEventListener('voiceschanged', done);
-      // Fallback in case the event never fires
-      setTimeout(done, 400);
-    });
-  }
+  try {
+    // Some browsers load voices asynchronously
+    if (!window.speechSynthesis.getVoices().length) {
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          window.speechSynthesis.removeEventListener('voiceschanged', done);
+          resolve();
+        };
+        window.speechSynthesis.addEventListener('voiceschanged', done);
+        // Fallback in case the event never fires
+        setTimeout(done, 400);
+      });
+    }
 
-  const voice = pickVoice();
-
-  for (let i = 0; i < clean.length; i++) {
     if (myToken !== speakToken || !isVoiceOn()) return;
-    await speakOne(`Number ${numberWord(i + 1)}. ${clean[i]}`, voice);
-    // Tiny gap between captions so they don't run together
-    if (myToken !== speakToken) return;
-    await new Promise((r) => setTimeout(r, 280));
+
+    const voice = pickVoice();
+
+    for (let i = 0; i < clean.length; i++) {
+      if (myToken !== speakToken || !isVoiceOn()) return;
+      await speakOne(`Number ${numberWord(i + 1)}. ${clean[i]}`, voice);
+      // Tiny gap between captions so they don't run together
+      if (myToken !== speakToken) return;
+      await new Promise((r) => setTimeout(r, 280));
+    }
+  } finally {
+    if (myToken === speakToken) duckMusic(false);
   }
 }
 
