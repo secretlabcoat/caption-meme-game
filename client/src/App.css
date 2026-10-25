@@ -205,7 +205,7 @@ input:focus, textarea:focus {
   border-color: var(--hot);
   box-shadow: 0 0 0 4px rgba(255, 77, 141, 0.28);
 }
-textarea { resize: vertical; min-height: 6rem; }
+textarea { resize: vertical; min-height: 4.75rem; }
 
 .code-input {
   letter-spacing: 0.28em;
@@ -454,8 +454,12 @@ button.secondary:not(:disabled):active { box-shadow: 0 2px 0 var(--mint-deep); }
 .photo-wrap img {
   display: block;
   width: 100%;
-  max-height: min(52vh, 440px);
+  max-height: min(42vh, 380px);
   object-fit: cover;
+}
+/* Keep the caption box on screen under the photo on phones and short laptops. */
+.photo-wrap.compact img {
+  max-height: min(28vh, 220px);
 }
 .stage-flag {
   position: absolute;

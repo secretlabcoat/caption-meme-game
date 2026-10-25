@@ -348,7 +348,7 @@ export default function App() {
       )}
 
       {(state.phase === 'caption' || state.phase === 'vote' || state.phase === 'score') && state.imageUrl && (
-        <div className="photo-wrap">
+        <div className={`photo-wrap${state.phase === 'caption' ? ' compact' : ''}`}>
           <div className={`stage-flag stage-${state.phase}`}>
             {state.phase === 'caption' && 'This round'}
             {state.phase === 'vote' && 'Vote'}
