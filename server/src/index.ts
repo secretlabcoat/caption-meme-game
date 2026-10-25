@@ -7,6 +7,7 @@ import {
   createRoom,
   getRoomBySocket,
   joinRoom,
+  exitRoom,
   leaveRoom,
   nextRoundOrEnd,
   rematch,
@@ -178,6 +179,18 @@ io.on('connection', (socket) => {
     }
     ack?.({ ok: true });
     emitRoom(room);
+  });
+
+  socket.on('room:leave', (_payload, ack?) => {
+    const pending = pendingLeaves.get(pid);
+    if (pending) {
+      clearTimeout(pending);
+      pendingLeaves.delete(pid);
+    }
+    const result = exitRoom(pid);
+    if (result) socket.leave(result.room.code);
+    if (result && !result.emptied) emitRoom(result.room);
+    ack?.({ ok: true });
   });
 
   socket.on('game:lobby', (_payload, ack?) => {

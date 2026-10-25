@@ -45,6 +45,9 @@ export default function App() {
   const [musicPlaying, setMusicPlaying] = useState(false);
   const [musicDucked, setMusicDucked] = useState(false);
   const spokenKeyRef = useRef<string>('');
+  // After Home, ignore room updates until the next create/join.
+  // A late update must not pull this player back into the room.
+  const ignoreRoomRef = useRef(false);
 
   const secondsLeft = useCountdown(state?.phaseEndsAt ?? null);
 
@@ -52,6 +55,7 @@ export default function App() {
     const onConnect = () => setConnected(true);
     const onDisconnect = () => setConnected(false);
     const onState = (s: RoomState) => {
+      if (ignoreRoomRef.current) return;
       setState(s);
       setScreen('game');
       setError(null);
@@ -138,6 +142,7 @@ export default function App() {
     setError(null);
     socket.timeout(60000).emit(event, payload, (err: Error | null, res: { error?: string; state?: RoomState } & Record<string, unknown>) => {
       setBusy(false);
+      if (ignoreRoomRef.current) return;
       if (err) {
         setError('Server did not respond. Is the API running on port 3001?');
         return;
@@ -158,6 +163,7 @@ export default function App() {
       setError('Enter a display name');
       return;
     }
+    ignoreRoomRef.current = false;
     withAck('room:create', { name: name.trim(), totalRounds: rounds, captionSeconds }, (res) => {
       if (res.state) setState(res.state as RoomState);
     });
@@ -171,9 +177,22 @@ export default function App() {
       setError('Enter a name and room code');
       return;
     }
+    ignoreRoomRef.current = false;
     withAck('room:join', { name: name.trim(), code: joinCode.trim() }, (res) => {
       if (res.state) setState(res.state as RoomState);
     });
+  }
+
+  function goHome() {
+    ignoreRoomRef.current = true;
+    stopSpeaking();
+    spokenKeyRef.current = '';
+    setCaptionText('');
+    setError(null);
+    setBusy(false);
+    setState(null);
+    setScreen('home');
+    socket.emit('room:leave');
   }
 
   function submitCaption(e: FormEvent) {
@@ -305,6 +324,9 @@ export default function App() {
           </p>
         </div>
         <div className="topbar-actions">
+          <button type="button" className="home-btn" onClick={goHome} aria-label="Leave room and go home">
+            Home
+          </button>
           {toggles}
           <div className={`phase-pill phase-${state.phase}`}>{PHASE_LABEL[state.phase]}</div>
         </div>
