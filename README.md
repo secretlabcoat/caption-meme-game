@@ -36,7 +36,9 @@ Then open **http://localhost:5173** in a browser. Use a few tabs as different pl
 
 ## Photos
 
-Game photos live in `client/public/photos`. Stock photo watermarks are fine.
+Game photos live in `client/public/photos` as `/photos/1.jpg` … `/photos/16.jpg`.
+Pool favors weird action / unusual moments (food fights, costumes, arguments, stunts).
+Stock watermarks/logos are fine. Manifest is `server/src/images.ts`.
 
 ## Deploy notes (already set up in this project)
 
