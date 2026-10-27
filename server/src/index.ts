@@ -1,11 +1,12 @@
 import express from 'express';
 import { createServer } from 'http';
-import { Server } from 'socket.io';
+import { Server, type Socket } from 'socket.io';
 import cors from 'cors';
 import {
   backToLobby,
   createRoom,
   getRoomBySocket,
+  joinBlockReason,
   joinRoom,
   exitRoom,
   leaveRoom,
@@ -40,11 +41,58 @@ const io = new Server(httpServer, {
   connectionStateRecovery: { maxDisconnectionDuration: 2 * 60 * 1000 },
 });
 
-/** Grace period before a disconnected player is removed (phone lock, network blip). */
+/** Grace period before a disconnected player is removed from the lobby (phone lock, network blip). */
 const RECONNECT_GRACE_MS = 3 * 60 * 1000;
 const pendingLeaves = new Map<string, NodeJS.Timeout>();
-/** Number of live sockets per stable player id. */
-const liveSockets = new Map<string, number>();
+/**
+ * Sockets that have actually entered a room (create, join, or resume).
+ * A home-screen connection must not count — a refresh or a new tab shares the
+ * player key, and counting it would keep a seat "live" after the player left.
+ */
+const seatedSockets = new Map<string, number>();
+
+function clearPendingLeave(pid: string) {
+  const pending = pendingLeaves.get(pid);
+  if (!pending) return;
+  clearTimeout(pending);
+  pendingLeaves.delete(pid);
+}
+
+/** Mark this socket as sitting in the room and cancel any pending removal. */
+function seatSocket(socket: Socket, pid: string, room: Room) {
+  const me = room.players.get(pid);
+  if (!me) return;
+  me.connected = true;
+  socket.join(room.code);
+  if (!socket.data.seated) {
+    socket.data.seated = true;
+    seatedSockets.set(pid, (seatedSockets.get(pid) ?? 0) + 1);
+  }
+  clearPendingLeave(pid);
+}
+
+/**
+ * Drop this player out of whatever room they are in.
+ * Other tabs with the same player key are told to leave the game screen.
+ */
+function releaseSeat(socket: Socket, pid: string) {
+  clearPendingLeave(pid);
+  const peers = io.sockets.adapter.rooms.get(pid);
+  if (peers) {
+    for (const id of peers) {
+      if (id === socket.id) continue;
+      const other = io.sockets.sockets.get(id);
+      if (!other) continue;
+      other.data.seated = false;
+      other.emit('room:left');
+    }
+  }
+  socket.data.seated = false;
+  seatedSockets.delete(pid);
+  const result = exitRoom(pid);
+  if (result) socket.leave(result.room.code);
+  if (result && !result.emptied) emitRoom(result.room);
+}
 
 function emitRoom(room: Room) {
   for (const playerId of room.players.keys()) {
@@ -56,22 +104,23 @@ io.on('connection', (socket) => {
   const rawKey = (socket.handshake.auth as { playerKey?: unknown } | undefined)?.playerKey;
   const pid = typeof rawKey === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(rawKey) ? rawKey : socket.id;
   socket.join(pid);
-  liveSockets.set(pid, (liveSockets.get(pid) ?? 0) + 1);
-  const pending = pendingLeaves.get(pid);
-  if (pending) {
-    clearTimeout(pending);
-    pendingLeaves.delete(pid);
-  }
-  // Reconnecting player: restore them into their room
-  {
+  // Do not put this socket back in a room here. A refresh and a new tab use the
+  // same player key as a phone that slept. Only room:resume (the page that was
+  // already in the game) should reclaim the seat.
+
+  socket.on('room:resume', (payload, ack) => {
+    // Clients may emit the ack with or without a payload object.
+    const done = typeof payload === 'function' ? payload : ack;
     const existing = getRoomBySocket(pid);
     const me = existing?.players.get(pid);
-    if (existing && me) {
-      me.connected = true;
-      socket.join(existing.code);
-      emitRoom(existing);
+    if (!existing || !me) {
+      done?.({ error: 'Not in a room' });
+      return;
     }
-  }
+    seatSocket(socket, pid, existing);
+    done?.({ state: toPublicState(existing, pid) });
+    emitRoom(existing);
+  });
 
   socket.on('room:create', (payload: { name: string; totalRounds?: number; captionSeconds?: number }, ack?) => {
     const name = (payload?.name ?? '').trim();
@@ -79,11 +128,12 @@ io.on('connection', (socket) => {
       ack?.({ error: 'Name required' });
       return;
     }
+    if (getRoomBySocket(pid)) releaseSeat(socket, pid);
     const room = createRoom(pid, name, {
       totalRounds: payload.totalRounds,
       captionSeconds: payload.captionSeconds,
     });
-    socket.join(room.code);
+    seatSocket(socket, pid, room);
     const state = toPublicState(room, pid);
     ack?.({ state });
     emitRoom(room);
@@ -91,17 +141,25 @@ io.on('connection', (socket) => {
 
   socket.on('room:join', (payload: { code: string; name: string }, ack?) => {
     const name = (payload?.name ?? '').trim();
-    const code = (payload?.code ?? '').trim();
+    const code = (payload?.code ?? '').trim().toUpperCase();
     if (!name || !code) {
       ack?.({ error: 'Name and room code required' });
       return;
     }
+    // Refuse before leaving the current seat, so a typo doesn't kick them out.
+    const blocked = joinBlockReason(code, pid, name);
+    if (blocked) {
+      ack?.({ error: blocked });
+      return;
+    }
+    const current = getRoomBySocket(pid);
+    if (current && current.code !== code) releaseSeat(socket, pid);
     const result = joinRoom(code, pid, name);
     if ('error' in result) {
       ack?.({ error: result.error });
       return;
     }
-    socket.join(result.code);
+    seatSocket(socket, pid, result);
     ack?.({ state: toPublicState(result, pid) });
     emitRoom(result);
   });
@@ -182,10 +240,17 @@ io.on('connection', (socket) => {
   });
 
   socket.on('room:leave', (_payload, ack?) => {
-    const pending = pendingLeaves.get(pid);
-    if (pending) {
-      clearTimeout(pending);
-      pendingLeaves.delete(pid);
+    clearPendingLeave(pid);
+    if (socket.data.seated) {
+      socket.data.seated = false;
+      const n = (seatedSockets.get(pid) ?? 1) - 1;
+      if (n > 0) seatedSockets.set(pid, n);
+      else seatedSockets.delete(pid);
+    }
+    // Another tab of this same player is still in the game.
+    if ((seatedSockets.get(pid) ?? 0) > 0) {
+      ack?.({ ok: true });
+      return;
     }
     const result = exitRoom(pid);
     if (result) socket.leave(result.room.code);
@@ -209,12 +274,16 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    const n = (liveSockets.get(pid) ?? 1) - 1;
+    // A tab sitting on create/join never took a seat. Closing it must not
+    // mark the player offline in a game that another tab is still playing.
+    if (!socket.data.seated) return;
+    socket.data.seated = false;
+    const n = (seatedSockets.get(pid) ?? 1) - 1;
     if (n > 0) {
-      liveSockets.set(pid, n);
+      seatedSockets.set(pid, n);
       return;
     }
-    liveSockets.delete(pid);
+    seatedSockets.delete(pid);
     const room = getRoomBySocket(pid);
     const me = room?.players.get(pid);
     if (room && me) {
@@ -225,7 +294,7 @@ io.on('connection', (socket) => {
       pid,
       setTimeout(() => {
         pendingLeaves.delete(pid);
-        if (liveSockets.get(pid)) return;
+        if ((seatedSockets.get(pid) ?? 0) > 0) return;
         const result = leaveRoom(pid);
         if (result && !result.emptied) emitRoom(result.room);
       }, RECONNECT_GRACE_MS)

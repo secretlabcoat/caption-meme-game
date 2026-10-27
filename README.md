@@ -27,7 +27,7 @@ Then open **http://localhost:5173** in a browser. Use a few tabs as different pl
 
 ## How a round works
 
-1. One person creates a room and shares the code  
+1. One person creates a room and shares the code or the invite link (`?room=ABCD`)  
 2. Others join with the code  
 3. Host starts (needs at least 2 people)  
 4. Everyone writes a caption for the photo  
@@ -54,6 +54,7 @@ Stock watermarks/logos are fine. Manifest is `server/src/images.ts`.
 
 - **Cold start:** The API runs on Render's free tier, which sleeps after ~15 min with no HTTP traffic. The first open after idle can take ~30–60 s. Sleeping also wipes in-memory rooms.
 - **Keep-awake:** While the page is open, the client pings `/health` every 4 min so the server doesn't sleep mid-game.
-- **Reconnects:** Each browser has a stable player key (localStorage). If a phone locks or drops network, it rejoins the same seat automatically; players get a 3-minute grace period before removal.
+- **Reconnects:** Each browser has a stable player key (localStorage). If a phone sleeps or drops network without reloading, that same page resumes its seat. Reloading, tapping Home, or opening a new tab lands on create/join instead of pulling you back into the old room. A dropped lobby seat is removed after a 3-minute grace period.
+- **Invite links:** The lobby shows a link like `?room=ABCD`. Opening it fills in the code. Guests still pick a display name (no login) and tap Join.
 - **Socket.IO:** `pingInterval` 20 s / `pingTimeout` 60 s; client retries forever and reconnects when the tab becomes visible.
 - **Timers:** Default caption timer is 90 s (configurable 10–180). Voting has no timer.

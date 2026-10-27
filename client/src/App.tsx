@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { isMusicOn, setMusicOn, subscribeMusic, unlockMusic } from './music';
 import { socket } from './socket';
-import type { RoomState } from './types';
+import type { Highlight, RoomState } from './types';
 import { isVoiceOn, setVoiceOn, speakCaptions, stopSpeaking, unlockSpeech } from './speak';
 import './App.css';
 
@@ -18,6 +18,30 @@ const PHASE_LABEL: Record<RoomState['phase'], string> = {
 
 const CHIP_COLORS = ['pink', 'gold', 'mint', 'sky', 'grape'] as const;
 
+function roomCodeFromUrl(): string {
+  const raw = new URLSearchParams(window.location.search).get('room') ?? '';
+  return raw.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+}
+
+function inviteUrl(code: string): string {
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.hash = '';
+  url.searchParams.set('room', code);
+  return url.toString();
+}
+
+function rememberRoomInUrl(code: string | null) {
+  const url = new URL(window.location.href);
+  url.hash = '';
+  if (code) url.searchParams.set('room', code);
+  else url.searchParams.delete('room');
+  const next = `${url.pathname}${url.search}`;
+  if (`${window.location.pathname}${window.location.search}` !== next) {
+    window.history.replaceState({}, '', next);
+  }
+}
+
 function useCountdown(endsAt: number | null) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -32,7 +56,8 @@ function useCountdown(endsAt: number | null) {
 export default function App() {
   const [screen, setScreen] = useState<Screen>('home');
   const [name, setName] = useState(() => localStorage.getItem('cmg-name') ?? '');
-  const [joinCode, setJoinCode] = useState('');
+  const [joinCode, setJoinCode] = useState(roomCodeFromUrl);
+  const [openedFromInvite] = useState(() => roomCodeFromUrl().length > 0);
   const [rounds, setRounds] = useState(3);
   const [captionSeconds, setCaptionSeconds] = useState(90);
   const [state, setState] = useState<RoomState | null>(null);
@@ -45,29 +70,80 @@ export default function App() {
   const [musicPlaying, setMusicPlaying] = useState(false);
   const [musicDucked, setMusicDucked] = useState(false);
   const spokenKeyRef = useRef<string>('');
-  // After Home, ignore room updates until the next create/join.
-  // A late update must not pull this player back into the room.
-  const ignoreRoomRef = useRef(false);
+  const joinCardRef = useRef<HTMLFormElement>(null);
+  const joinNameRef = useRef<HTMLInputElement>(null);
+  // This page is in a room only after create, join, or an in-page resume.
+  // A reload starts false, so a leftover seat cannot yank the player back in.
+  const acceptRoomRef = useRef(false);
+  // Stops a second tap (pointerdown + click) from sending two votes.
+  const votingRef = useRef(false);
+
+  function applyRoom(s: RoomState) {
+    if (s.phase !== 'vote') votingRef.current = false;
+    acceptRoomRef.current = true;
+    setState(s);
+    setScreen('game');
+    setError(null);
+    if (s.phase !== 'caption') setCaptionText('');
+    rememberRoomInUrl(s.code);
+  }
 
   const secondsLeft = useCountdown(state?.phaseEndsAt ?? null);
 
   useEffect(() => {
-    const onConnect = () => setConnected(true);
+    if (!openedFromInvite) return;
+    joinCardRef.current?.scrollIntoView({ block: 'center' });
+    if (!joinNameRef.current?.value) joinNameRef.current?.focus();
+  }, [openedFromInvite]);
+
+  useEffect(() => {
+    const onConnect = () => {
+      setConnected(true);
+      // Phone sleep and network blips reconnect this same page. A fresh load
+      // has not entered a room, so it stays on create/join.
+      if (!acceptRoomRef.current) return;
+      socket.timeout(60000).emit('room:resume', (err: Error | null, res?: { error?: string; state?: RoomState }) => {
+        if (!acceptRoomRef.current) return;
+        if (err || res?.error || !res?.state) {
+          acceptRoomRef.current = false;
+          votingRef.current = false;
+          stopSpeaking();
+          spokenKeyRef.current = '';
+          setState(null);
+          setScreen('home');
+          rememberRoomInUrl(null);
+          setError('That room ended. Create or join a new one.');
+          return;
+        }
+        applyRoom(res.state);
+      });
+    };
     const onDisconnect = () => setConnected(false);
     const onState = (s: RoomState) => {
-      if (ignoreRoomRef.current) return;
-      setState(s);
-      setScreen('game');
-      setError(null);
-      if (s.phase !== 'caption') setCaptionText('');
+      if (!acceptRoomRef.current) return;
+      applyRoom(s);
+    };
+    const onLeft = () => {
+      if (!acceptRoomRef.current) return;
+      acceptRoomRef.current = false;
+      votingRef.current = false;
+      stopSpeaking();
+      spokenKeyRef.current = '';
+      setCaptionText('');
+      setState(null);
+      setScreen('home');
+      rememberRoomInUrl(null);
     };
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('room:state', onState);
+    socket.on('room:left', onLeft);
+    if (socket.connected) onConnect();
     return () => {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off('room:state', onState);
+      socket.off('room:left', onLeft);
     };
   }, []);
 
@@ -136,19 +212,22 @@ export default function App() {
   function withAck(
     event: string,
     payload: unknown,
-    onOk?: (res: Record<string, unknown>) => void
+    onOk?: (res: Record<string, unknown>) => void,
+    onFail?: () => void,
   ) {
     setBusy(true);
     setError(null);
     socket.timeout(60000).emit(event, payload, (err: Error | null, res: { error?: string; state?: RoomState } & Record<string, unknown>) => {
       setBusy(false);
-      if (ignoreRoomRef.current) return;
+      if (!acceptRoomRef.current) return;
       if (err) {
         setError('Server did not respond. Is the API running on port 3001?');
+        onFail?.();
         return;
       }
       if (res?.error) {
         setError(res.error);
+        onFail?.();
         return;
       }
       onOk?.(res);
@@ -163,9 +242,11 @@ export default function App() {
       setError('Enter a display name');
       return;
     }
-    ignoreRoomRef.current = false;
+    acceptRoomRef.current = true;
     withAck('room:create', { name: name.trim(), totalRounds: rounds, captionSeconds }, (res) => {
-      if (res.state) setState(res.state as RoomState);
+      if (res.state) applyRoom(res.state as RoomState);
+    }, () => {
+      acceptRoomRef.current = false;
     });
   }
 
@@ -177,14 +258,17 @@ export default function App() {
       setError('Enter a name and room code');
       return;
     }
-    ignoreRoomRef.current = false;
+    acceptRoomRef.current = true;
     withAck('room:join', { name: name.trim(), code: joinCode.trim() }, (res) => {
-      if (res.state) setState(res.state as RoomState);
+      if (res.state) applyRoom(res.state as RoomState);
+    }, () => {
+      acceptRoomRef.current = false;
     });
   }
 
   function goHome() {
-    ignoreRoomRef.current = true;
+    acceptRoomRef.current = false;
+    votingRef.current = false;
     stopSpeaking();
     spokenKeyRef.current = '';
     setCaptionText('');
@@ -192,7 +276,16 @@ export default function App() {
     setBusy(false);
     setState(null);
     setScreen('home');
+    rememberRoomInUrl(null);
     socket.emit('room:leave');
+  }
+
+  function castVote(captionId: string) {
+    if (votingRef.current) return;
+    votingRef.current = true;
+    withAck('vote:submit', { captionId }, undefined, () => {
+      votingRef.current = false;
+    });
   }
 
   function submitCaption(e: FormEvent) {
@@ -271,12 +364,15 @@ export default function App() {
             </button>
           </form>
 
-          <form className="card join" onSubmit={joinRoom}>
+          <form className={`card join${openedFromInvite ? ' invited' : ''}`} onSubmit={joinRoom} ref={joinCardRef}>
             <p className="card-kicker">Guest</p>
             <h2>Join room</h2>
+            {openedFromInvite && (
+              <p className="lede">Invite link applied. Enter your name and join.</p>
+            )}
             <label>
               Display name
-              <input value={name} onChange={(e) => setName(e.target.value)} maxLength={24} placeholder="Your name" autoComplete="nickname" />
+              <input ref={joinNameRef} value={name} onChange={(e) => setName(e.target.value)} maxLength={24} placeholder="Your name" autoComplete="nickname" />
             </label>
             <label>
               Room code
@@ -339,7 +435,8 @@ export default function App() {
           <p className="card-kicker">Waiting room</p>
           <h2>Share this code</h2>
           <p className="room-code" aria-label={`Room code ${state.code}`}>{state.code}</p>
-          <p className="lede">Friends join with the code. Extra tabs on this computer work too.</p>
+          <p className="lede">Friends can type the code, or open your invite link.</p>
+          <InviteLink code={state.code} />
           <ul className="player-list">
             {state.players.map((p, i) => (
               <li key={p.id} className={`${!p.connected ? 'dim' : ''} chip-${CHIP_COLORS[i % CHIP_COLORS.length]}`}>
@@ -419,10 +516,10 @@ export default function App() {
           <h2>Vote for your favorite</h2>
           <p className="muted">
             {voiceOn
-              ? 'Listen for number one, number two… Captions stay anonymous.'
+              ? 'You can vote while the voice is still reading. Captions stay anonymous.'
               : 'Pick a favorite. Captions stay anonymous.'}
           </p>
-          {readingAloud && <p className="now-reading">Reading the captions…</p>}
+          {readingAloud && <p className="now-reading">Reading the captions… you can vote now</p>}
           {state.myVoteCaptionId ? (
             <p className="ok-text">Vote locked in. Waiting for the room…</p>
           ) : (
@@ -432,9 +529,15 @@ export default function App() {
                   <button
                     type="button"
                     className="caption-btn"
-                    disabled={busy}
                     aria-label={`Number ${i + 1}. ${c.text}`}
-                    onClick={() => withAck('vote:submit', { captionId: c.id })}
+                    onPointerDown={(event) => {
+                      // Phones drop click events while speechSynthesis is speaking.
+                      // preventDefault skips the extra click that would follow the tap.
+                      if (event.button !== 0) return;
+                      event.preventDefault();
+                      castVote(c.id);
+                    }}
+                    onClick={() => castVote(c.id)}
                   >
                     <span className={`num-badge tone-${i % 5}`}>{i + 1}</span>
                     <span className="caption-text">{c.text}</span>
@@ -452,6 +555,7 @@ export default function App() {
           <p className="card-kicker">Scoreboard</p>
           <h2>Round results</h2>
           {readingAloud && <p className="now-reading">Reading the captions…</p>}
+          <BestReplay highlights={state.highlights} roundNumber={state.roundNumber} />
           <ul className="caption-list results">
             {state.captions.map((c, i) => {
               const votes = c.voteCount ?? 0;
@@ -477,8 +581,9 @@ export default function App() {
               {state.roundNumber >= state.totalRounds ? 'See final results' : 'Next round'}
             </button>
           ) : (
-            <p className="muted hint">Waiting for the host…</p>
+            <p className="muted hint">Waiting for the host to continue…</p>
           )}
+          <RematchControls isHost={state.isHost} busy={busy} onRematch={() => withAck('game:rematch', {})} />
         </section>
       )}
 
@@ -492,19 +597,15 @@ export default function App() {
               ? (state.players.find((p) => p.id === state.winnerIds[0])?.name ?? '??')
               : state.winnerIds.map((id) => state.players.find((p) => p.id === id)?.name).filter(Boolean).join(', ')}
           </p>
+          <BestReplay highlights={state.highlights} />
           <Leaderboard players={sortedPlayers} youId={state.youId} />
-          {state.isHost ? (
-            <div className="row">
-              <button type="button" disabled={busy} onClick={() => withAck('game:rematch', {})}>
-                Rematch
-              </button>
-              <button type="button" className="secondary" disabled={busy} onClick={() => withAck('game:lobby', {})}>
-                Back to lobby
-              </button>
-            </div>
-          ) : (
-            <p className="muted hint">Waiting for the host…</p>
-          )}
+          <RematchControls
+            isHost={state.isHost}
+            busy={busy}
+            featured
+            onRematch={() => withAck('game:rematch', {})}
+            onLobby={() => withAck('game:lobby', {})}
+          />
         </section>
       )}
     </div>
@@ -558,6 +659,113 @@ function EqBars({ mode }: { mode: 'off' | 'idle' | 'live' | 'ducked' }) {
     <span className={`eq eq-${mode}`} aria-hidden="true">
       <i /><i /><i />
     </span>
+  );
+}
+
+function InviteLink({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  const [hint, setHint] = useState<string | null>(null);
+  const fieldRef = useRef<HTMLInputElement>(null);
+  const link = inviteUrl(code);
+
+  async function copy() {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('no clipboard');
+      await navigator.clipboard.writeText(link);
+      setHint(null);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+      setHint('Long-press the link to copy it.');
+      fieldRef.current?.focus();
+      fieldRef.current?.select();
+    }
+  }
+
+  return (
+    <div className="invite-block">
+      <label>
+        Invite link
+        <input
+          ref={fieldRef}
+          className="invite-link"
+          readOnly
+          value={link}
+          aria-label="Invite link"
+          onFocus={(e) => e.currentTarget.select()}
+        />
+      </label>
+      <button type="button" className="secondary" onClick={() => void copy()}>
+        {copied ? 'Link copied' : 'Copy invite link'}
+      </button>
+      {hint && <p className="muted hint">{hint}</p>}
+    </div>
+  );
+}
+
+function BestReplay({
+  highlights,
+  roundNumber,
+}: {
+  highlights: Highlight[];
+  roundNumber?: number;
+}) {
+  const items = roundNumber == null
+    ? highlights
+    : highlights.filter((h) => h.roundNumber === roundNumber);
+  if (!items.length) return null;
+  return (
+    <div className="replay">
+      <p className="card-kicker">{roundNumber == null ? 'Best captions' : 'Best caption'}</p>
+      <ul className="replay-list">
+        {items.map((h, i) => (
+          <li key={`${h.roundNumber}-${i}`} className="replay-card">
+            {roundNumber == null && <p className="replay-round">Round {h.roundNumber}</p>}
+            <blockquote>{h.text}</blockquote>
+            <p className="replay-meta">
+              {h.voteCount} vote{h.voteCount === 1 ? '' : 's'}
+              <span className="badge top">Top laugh</span>
+            </p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function RematchControls({
+  isHost,
+  busy,
+  featured,
+  onRematch,
+  onLobby,
+}: {
+  isHost: boolean;
+  busy: boolean;
+  featured?: boolean;
+  onRematch: () => void;
+  onLobby?: () => void;
+}) {
+  return (
+    <div className={`rematch-block${featured ? ' featured' : ''}`}>
+      <p className="card-kicker">Play again</p>
+      {isHost ? (
+        <>
+          <button type="button" className="rematch-btn" disabled={busy} onClick={onRematch}>
+            Rematch
+          </button>
+          <p className="muted hint">Resets scores and brings everyone back to the lobby.</p>
+          {onLobby && (
+            <button type="button" className="secondary" disabled={busy} onClick={onLobby}>
+              Back to lobby
+            </button>
+          )}
+        </>
+      ) : (
+        <p className="rematch-wait">Want another game? The host can tap Rematch.</p>
+      )}
+    </div>
   );
 }
 

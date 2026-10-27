@@ -14,6 +14,13 @@ export interface PublicCaption {
   voteCount?: number;
 }
 
+/** A top-voted line from a finished round. Anonymous — no writer. */
+export interface Highlight {
+  roundNumber: number;
+  text: string;
+  voteCount: number;
+}
+
 export interface RoomState {
   code: string;
   phase: Phase;
@@ -30,4 +37,5 @@ export interface RoomState {
   myCaptionSubmitted: boolean;
   myVoteCaptionId: string | null;
   winnerIds: string[];
+  highlights: Highlight[];
 }
