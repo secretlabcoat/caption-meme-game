@@ -43,24 +43,34 @@ export function createRoom(
     totalRounds: opts?.totalRounds ?? DEFAULT_ROUNDS,
     captionSeconds: opts?.captionSeconds ?? DEFAULT_CAPTION_SECONDS,
     usedImageIndexes: [],
+    highlights: [],
   };
   rooms.set(code, room);
   socketToRoom.set(hostSocketId, code);
   return room;
 }
 
+/** Why this player cannot join, or null if joinRoom would succeed. Does not mutate. */
+export function joinBlockReason(code: string, socketId: string, name: string): string | null {
+  const room = rooms.get(code.toUpperCase());
+  if (!room) return 'Room not found';
+  if (room.players.has(socketId)) return null;
+  if (room.phase !== 'lobby') return 'Game already started';
+  if ([...room.players.values()].some((p) => p.name.toLowerCase() === name.trim().toLowerCase())) {
+    return 'Name already taken in this room';
+  }
+  return null;
+}
+
 export function joinRoom(code: string, socketId: string, name: string): Room | { error: string } {
   const room = rooms.get(code.toUpperCase());
-  if (!room) return { error: 'Room not found' };
+  const blocked = joinBlockReason(code, socketId, name);
+  if (blocked || !room) return { error: blocked ?? 'Room not found' };
   if (room.players.has(socketId)) {
     const me = room.players.get(socketId)!;
     me.connected = true;
     socketToRoom.set(socketId, room.code);
     return room;
-  }
-  if (room.phase !== 'lobby') return { error: 'Game already started' };
-  if ([...room.players.values()].some((p) => p.name.toLowerCase() === name.trim().toLowerCase())) {
-    return { error: 'Name already taken in this room' };
   }
   const player: Player = {
     id: socketId,
@@ -163,6 +173,7 @@ function beginRound(room: Room, number: number) {
     imageUrl: url,
     captions: [],
     votes: {},
+    voteOrder: [],
     phaseEndsAt: Date.now() + room.captionSeconds * 1000,
   };
 }
@@ -197,7 +208,9 @@ export function maybeAdvanceFromCaption(room: Room) {
 
 function enterVotePhase(room: Room) {
   if (!room.round) return;
-  // Players who didn't submit get a placeholder so vote UI still works; skip empty rooms
+  // Freeze the ballot order once. Shuffling again on every broadcast reordered
+  // the buttons while people were tapping (and restarted the read-aloud).
+  room.round.voteOrder = shuffle(room.round.captions.map((c) => c.id));
   room.phase = 'vote';
   room.round.phaseEndsAt = null;
   room.round.votes = {};
@@ -235,6 +248,18 @@ function enterScorePhase(room: Room) {
     const player = room.players.get(caption.playerId);
     if (player) player.score += pts;
   }
+  const top = room.round.captions.reduce((max, caption) => Math.max(max, voteCounts.get(caption.id) ?? 0), 0);
+  if (top > 0) {
+    for (const caption of room.round.captions) {
+      const votes = voteCounts.get(caption.id) ?? 0;
+      if (votes !== top) continue;
+      room.highlights.push({
+        roundNumber: room.round.number,
+        text: caption.text,
+        voteCount: votes,
+      });
+    }
+  }
   room.phase = 'score';
   room.round.phaseEndsAt = null;
 }
@@ -259,6 +284,7 @@ export function rematch(room: Room, requesterId: string): { error: string } | nu
     if (!p.connected) room.players.delete(id);
   }
   room.usedImageIndexes = [];
+  room.highlights = [];
   room.round = null;
   room.phase = 'lobby';
   return null;
@@ -271,6 +297,7 @@ export function backToLobby(room: Room, requesterId: string): { error: string } 
     if (!p.connected) room.players.delete(id);
   }
   room.usedImageIndexes = [];
+  room.highlights = [];
   room.round = null;
   room.phase = 'lobby';
   return null;
@@ -303,8 +330,12 @@ export function toPublicState(room: Room, youId: string): RoomState {
         text: c.text,
         ...(showVoteCounts ? { voteCount: voteCounts.get(c.id) ?? 0 } : {}),
       }));
-    if (room.phase === 'vote') list = shuffle(list);
-    else if (showVoteCounts) list = list.sort((a, b) => (b.voteCount ?? 0) - (a.voteCount ?? 0));
+    if (room.phase === 'vote') {
+      const order = new Map(room.round.voteOrder.map((id, index) => [id, index]));
+      list.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0) || a.id.localeCompare(b.id));
+    } else if (showVoteCounts) {
+      list.sort((a, b) => (b.voteCount ?? 0) - (a.voteCount ?? 0) || a.id.localeCompare(b.id));
+    }
     captions = list;
   }
 
@@ -336,6 +367,11 @@ export function toPublicState(room: Room, youId: string): RoomState {
     myCaptionSubmitted,
     myVoteCaptionId,
     winnerIds,
+    highlights: room.highlights.map((h) => ({
+      roundNumber: h.roundNumber,
+      text: h.text,
+      voteCount: h.voteCount,
+    })),
   };
 }
 

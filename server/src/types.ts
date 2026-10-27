@@ -18,7 +18,16 @@ export interface Round {
   imageUrl: string;
   captions: Caption[];
   votes: Record<string, string>; // voterId -> captionId
+  /** Caption ids in the order shown on the ballot. Fixed for the whole vote. */
+  voteOrder: string[];
   phaseEndsAt: number | null;
+}
+
+/** A top-voted line. Text only — never the writer. */
+export interface Highlight {
+  roundNumber: number;
+  text: string;
+  voteCount: number;
 }
 
 export interface Room {
@@ -30,6 +39,8 @@ export interface Room {
   totalRounds: number;
   captionSeconds: number;
   usedImageIndexes: number[];
+  /** Winning lines from finished rounds. Anonymous. */
+  highlights: Highlight[];
 }
 
 export interface PublicPlayer {
@@ -62,4 +73,5 @@ export interface RoomState {
   myCaptionSubmitted: boolean;
   myVoteCaptionId: string | null;
   winnerIds: string[];
+  highlights: Highlight[];
 }

@@ -160,6 +160,7 @@ h1, h2, h3 { line-height: 1.05; }
 
 .card.create { box-shadow: var(--shadow), inset 0 6px 0 var(--sun); }
 .card.join { box-shadow: var(--shadow), inset 0 6px 0 var(--hot); }
+.card.join.invited { box-shadow: var(--shadow), inset 0 6px 0 var(--hot), 0 0 0 3px var(--hot); }
 .panel.lobby { text-align: center; box-shadow: var(--shadow), inset 0 6px 0 var(--mint); }
 .panel.end {
   text-align: center;
@@ -219,7 +220,9 @@ textarea { resize: vertical; min-height: 4.75rem; }
 .panel > button,
 .stack > button,
 .row > button,
-.caption-btn {
+.caption-btn,
+.rematch-block > button,
+.invite-block > button {
   width: 100%;
 }
 
@@ -666,10 +669,87 @@ button.secondary:not(:disabled):active { box-shadow: 0 2px 0 var(--mint-deep); }
   font-weight: 800;
   color: #082033;
   background: var(--sky);
-  display: inline-block;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
   padding: 0.35rem 0.7rem;
   border-radius: 999px;
   box-shadow: 0 3px 0 #1b7cb5;
+}
+
+.invite-block { margin: 0.2rem 0 1rem; text-align: left; }
+.invite-link {
+  letter-spacing: 0;
+  text-transform: none;
+  font-family: var(--body);
+  font-size: 0.92rem;
+  text-align: left;
+}
+.invite-block button { margin-top: 0.2rem; }
+
+.replay { margin: 0 0 1rem; text-align: left; }
+.replay-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.replay-card {
+  background: linear-gradient(180deg, #fff1a8, #ffe56a);
+  color: #3a2208;
+  border-radius: 18px;
+  padding: 0.9rem 1rem 1rem;
+  box-shadow: 0 5px 0 var(--sun-deep);
+}
+.replay-round {
+  margin: 0 0 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+.replay-card blockquote {
+  margin: 0;
+  font-family: var(--display);
+  font-size: clamp(1.35rem, 5vw, 1.85rem);
+  line-height: 1.15;
+}
+.replay-meta {
+  margin: 0.5rem 0 0;
+  font-weight: 800;
+  font-size: 0.9rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.rematch-block {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.rematch-btn {
+  min-height: 64px;
+  font-size: 1.25rem;
+  background: linear-gradient(180deg, #ff8eb8, var(--hot) 55%, #ff2f78);
+  color: white;
+  box-shadow: 0 5px 0 var(--hot-deep);
+}
+.rematch-btn:not(:disabled):active { box-shadow: 0 2px 0 var(--hot-deep); }
+.rematch-block.featured .rematch-btn { min-height: 72px; font-size: 1.4rem; }
+.rematch-wait {
+  margin: 0;
+  font-weight: 800;
+  font-size: 1.05rem;
+  line-height: 1.35;
+  background: rgba(255, 77, 141, 0.16);
+  border: 2px solid rgba(255, 77, 141, 0.45);
+  border-radius: 16px;
+  padding: 0.85rem 0.9rem;
 }
 .status {
   display: inline-flex;

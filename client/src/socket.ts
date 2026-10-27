@@ -2,7 +2,11 @@ import { io, Socket } from 'socket.io-client';
 
 const URL = import.meta.env.VITE_SOCKET_URL ?? '';
 
-/** Stable per-browser id so a phone that sleeps / reconnects keeps its seat in the game. */
+/**
+ * Stable per-browser id so a phone that sleeps can resume the same seat.
+ * The key alone must not rejoin a room: a refresh or a new tab shares it and
+ * should land on create/join. The open page asks for room:resume instead.
+ */
 function getPlayerKey(): string {
   const KEY = 'cmg-player-key';
   let k = localStorage.getItem(KEY);
