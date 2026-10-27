@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
+import type { FormEvent, MouseEvent, PointerEvent } from 'react';
 import { isMusicOn, setMusicOn, subscribeMusic, unlockMusic } from './music';
 import { socket } from './socket';
 import type { Highlight, RoomState } from './types';
@@ -70,6 +70,7 @@ export default function App() {
   const [musicPlaying, setMusicPlaying] = useState(false);
   const [musicDucked, setMusicDucked] = useState(false);
   const spokenKeyRef = useRef<string>('');
+  const phaseRef = useRef<RoomState['phase'] | null>(null);
   const joinCardRef = useRef<HTMLFormElement>(null);
   const joinNameRef = useRef<HTMLInputElement>(null);
   // This page is in a room only after create, join, or an in-page resume.
@@ -168,11 +169,19 @@ export default function App() {
     if (name) localStorage.setItem('cmg-name', name);
   }, [name]);
 
-  // Read captions aloud when voting or results appear (anonymous — text only)
+  // Read captions aloud when voting or results appear (anonymous — text only).
+  // The finale stays quiet until someone taps Replay. Later end-screen updates
+  // (a phone reconnecting, for example) must not cancel that replay.
   useEffect(() => {
-    if (!state) return;
+    if (!state) {
+      phaseRef.current = null;
+      return;
+    }
+    const previousPhase = phaseRef.current;
+    phaseRef.current = state.phase;
     if (state.phase !== 'vote' && state.phase !== 'score') {
-      if (state.phase === 'caption' || state.phase === 'lobby' || state.phase === 'end') {
+      const enteredQuietPhase = previousPhase !== state.phase;
+      if (enteredQuietPhase && (state.phase === 'caption' || state.phase === 'lobby' || state.phase === 'end')) {
         stopSpeaking();
         spokenKeyRef.current = '';
       }
@@ -202,6 +211,13 @@ export default function App() {
 
   function toggleMusic() {
     setMusicOn(!musicOn);
+  }
+
+  // Explicit replay tap. Plays even if the Voice toggle is off, and still
+  // uses the same "Number one" + pause path as the round readout.
+  function playHighlights(texts: string[], startNumber = 1): Promise<void> {
+    unlockSpeech();
+    return speakCaptions(texts, { startNumber, force: true });
   }
 
   const sortedPlayers = useMemo(() => {
@@ -555,7 +571,12 @@ export default function App() {
           <p className="card-kicker">Scoreboard</p>
           <h2>Round results</h2>
           {readingAloud && <p className="now-reading">Reading the captions…</p>}
-          <BestReplay highlights={state.highlights} roundNumber={state.roundNumber} />
+          <BestReplay
+            highlights={state.highlights}
+            roundNumber={state.roundNumber}
+            onPlay={playHighlights}
+            onStop={stopSpeaking}
+          />
           <ul className="caption-list results">
             {state.captions.map((c, i) => {
               const votes = c.voteCount ?? 0;
@@ -597,7 +618,7 @@ export default function App() {
               ? (state.players.find((p) => p.id === state.winnerIds[0])?.name ?? '??')
               : state.winnerIds.map((id) => state.players.find((p) => p.id === id)?.name).filter(Boolean).join(', ')}
           </p>
-          <BestReplay highlights={state.highlights} />
+          <BestReplay highlights={state.highlights} onPlay={playHighlights} onStop={stopSpeaking} />
           <Leaderboard players={sortedPlayers} youId={state.youId} />
           <RematchControls
             isHost={state.isHost}
@@ -704,31 +725,121 @@ function InviteLink({ code }: { code: string }) {
   );
 }
 
+type ReplayMode = { kind: 'all' } | { kind: 'one'; index: number };
+
 function BestReplay({
   highlights,
   roundNumber,
+  onPlay,
+  onStop,
 }: {
   highlights: Highlight[];
   roundNumber?: number;
+  onPlay: (texts: string[], startNumber?: number) => Promise<void>;
+  onStop: () => void;
 }) {
   const items = roundNumber == null
     ? highlights
     : highlights.filter((h) => h.roundNumber === roundNumber);
+  const [mode, setMode] = useState<ReplayMode | null>(null);
+  const runRef = useRef(0);
+  const lastPointerRef = useRef(0);
+
+  useEffect(() => () => {
+    runRef.current += 1;
+  }, []);
+
   if (!items.length) return null;
+
+  const texts = items.map((h) => h.text);
+  const playingAll = mode?.kind === 'all';
+  const replayLabel = texts.length > 1 ? 'Replay best captions' : 'Play best caption';
+
+  function stop() {
+    runRef.current += 1;
+    setMode(null);
+    onStop();
+  }
+
+  function start(next: ReplayMode, spoken: string[], startNumber: number) {
+    const run = ++runRef.current;
+    setMode(next);
+    void onPlay(spoken, startNumber).finally(() => {
+      if (runRef.current === run) setMode(null);
+    });
+  }
+
+  // Phones drop click while speechSynthesis is speaking, so pointerdown starts
+  // the action and swallows the click from that same press (it can arrive late).
+  function press(event: PointerEvent<HTMLButtonElement> | MouseEvent<HTMLButtonElement>, action: () => void) {
+    if (event.button !== 0) return;
+    if (event.type === 'pointerdown') {
+      event.preventDefault();
+      lastPointerRef.current = event.timeStamp;
+      action();
+      return;
+    }
+    if (lastPointerRef.current !== 0 && event.timeStamp - lastPointerRef.current < 1200) return;
+    action();
+  }
+
   return (
     <div className="replay">
       <p className="card-kicker">{roundNumber == null ? 'Best captions' : 'Best caption'}</p>
+      <div className="replay-actions">
+        <button
+          type="button"
+          className={`replay-btn${playingAll ? ' stop' : ''}`}
+          aria-pressed={playingAll}
+          onPointerDown={(event) => press(event, () => {
+            if (playingAll) stop();
+            else start({ kind: 'all' }, texts, 1);
+          })}
+          onClick={(event) => press(event, () => {
+            if (playingAll) stop();
+            else start({ kind: 'all' }, texts, 1);
+          })}
+        >
+          {playingAll ? 'Stop replay' : replayLabel}
+        </button>
+        {mode && (
+          <p className="now-reading replay-status" role="status">
+            {playingAll ? 'Reading the best captions…' : 'Reading this caption…'}
+          </p>
+        )}
+      </div>
       <ul className="replay-list">
-        {items.map((h, i) => (
-          <li key={`${h.roundNumber}-${i}`} className="replay-card">
-            {roundNumber == null && <p className="replay-round">Round {h.roundNumber}</p>}
-            <blockquote>{h.text}</blockquote>
-            <p className="replay-meta">
-              {h.voteCount} vote{h.voteCount === 1 ? '' : 's'}
-              <span className="badge top">Top laugh</span>
-            </p>
-          </li>
-        ))}
+        {items.map((h, i) => {
+          const playingThis = mode?.kind === 'one' && mode.index === i;
+          return (
+            <li key={`${h.roundNumber}-${i}`} className={`replay-card${playingThis ? ' is-playing' : ''}`}>
+              {roundNumber == null && <p className="replay-round">Round {h.roundNumber}</p>}
+              <blockquote>{h.text}</blockquote>
+              <p className="replay-meta">
+                {h.voteCount} vote{h.voteCount === 1 ? '' : 's'}
+                <span className="badge top">Top laugh</span>
+              </p>
+              {texts.length > 1 && (
+                <button
+                  type="button"
+                  className={`replay-card-play${playingThis ? ' stop' : ''}`}
+                  aria-pressed={playingThis}
+                  aria-label={playingThis ? `Stop number ${i + 1}` : `Play number ${i + 1}. ${h.text}`}
+                  onPointerDown={(event) => press(event, () => {
+                    if (playingThis) stop();
+                    else start({ kind: 'one', index: i }, [h.text], i + 1);
+                  })}
+                  onClick={(event) => press(event, () => {
+                    if (playingThis) stop();
+                    else start({ kind: 'one', index: i }, [h.text], i + 1);
+                  })}
+                >
+                  {playingThis ? 'Stop' : 'Play'}
+                </button>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
