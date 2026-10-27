@@ -725,6 +725,39 @@ button.secondary:not(:disabled):active { box-shadow: 0 2px 0 var(--mint-deep); }
   align-items: center;
   gap: 0.4rem;
 }
+.replay-actions { margin: 0.15rem 0 0.75rem; }
+.replay-btn,
+.replay-card-play {
+  width: 100%;
+  touch-action: manipulation;
+}
+.replay-btn {
+  min-height: 64px;
+  font-size: 1.2rem;
+  background: linear-gradient(180deg, #9ad8ff, var(--sky) 55%, #3aa7e6);
+  color: #082033;
+  box-shadow: 0 5px 0 #1b7cb5;
+}
+.replay-card-play {
+  min-height: 56px;
+  margin-top: 0.75rem;
+  font-size: 1.05rem;
+  background: #241433;
+  color: #fff8ee;
+  box-shadow: 0 4px 0 #120818;
+}
+.replay-btn.stop,
+.replay-card-play.stop {
+  background: #fff8ee;
+  color: #241433;
+  box-shadow: 0 5px 0 #7a4de0;
+}
+.replay-btn:not(:disabled):active { box-shadow: 0 2px 0 #1b7cb5; }
+.replay-card-play:not(:disabled):active { box-shadow: 0 2px 0 #120818; }
+.replay-btn.stop:not(:disabled):active,
+.replay-card-play.stop:not(:disabled):active { box-shadow: 0 2px 0 #7a4de0; }
+.replay-card.is-playing { outline: 3px solid #1b7cb5; outline-offset: 2px; }
+.replay-status { margin: 0.65rem 0 0; }
 
 .rematch-block {
   margin-top: 1rem;

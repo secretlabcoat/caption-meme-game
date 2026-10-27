@@ -85,19 +85,27 @@ let speakToken = 0;
 
 /**
  * Speak each non-empty caption in order. Cancels any previous queue.
- * Safe to call when voice is off (no-op).
+ * Safe to call when voice is off (no-op), unless `force` is set for an
+ * explicit replay tap. `startNumber` is 1-based ("Number one" by default).
  * Lounge music dips for the whole read so the two don't fight.
  */
-export async function speakCaptions(texts: string[]): Promise<void> {
-  if (!isVoiceOn()) return;
+export async function speakCaptions(
+  texts: string[],
+  options?: { startNumber?: number; force?: boolean },
+): Promise<void> {
+  const force = options?.force === true;
+  if (!force && !isVoiceOn()) return;
   if (typeof window === 'undefined' || !window.speechSynthesis) return;
 
   const clean = texts.map((t) => t.trim()).filter(Boolean);
   if (!clean.length) return;
 
+  const startNumber = Math.max(1, Math.floor(options?.startNumber ?? 1));
   const myToken = ++speakToken;
   cancelQueuedSpeech();
   duckMusic(true);
+  // Voice off still cancels a forced replay, because the toggle calls stopSpeaking.
+  const stillCurrent = () => myToken === speakToken && (force || isVoiceOn());
 
   try {
     // Some browsers load voices asynchronously
@@ -113,16 +121,16 @@ export async function speakCaptions(texts: string[]): Promise<void> {
       });
     }
 
-    if (myToken !== speakToken || !isVoiceOn()) return;
+    if (!stillCurrent()) return;
 
     const voice = pickVoice();
 
     for (let i = 0; i < clean.length; i++) {
-      if (myToken !== speakToken || !isVoiceOn()) return;
+      if (!stillCurrent()) return;
       // Wait, then "Number one," then that caption. Same gap before every number.
       await new Promise((r) => setTimeout(r, PAUSE_BEFORE_NUMBER_MS));
-      if (myToken !== speakToken || !isVoiceOn()) return;
-      await speakOne(`Number ${numberWord(i + 1)}. ${clean[i]}`, voice);
+      if (!stillCurrent()) return;
+      await speakOne(`Number ${numberWord(startNumber + i)}. ${clean[i]}`, voice);
     }
   } finally {
     if (myToken === speakToken) duckMusic(false);
